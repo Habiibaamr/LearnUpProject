@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-slate-50 text-slate-800 antialiased;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-white/80 backdrop-blur-md border border-white/60;
+  }
+  .gradient-hero {
+    background: linear-gradient(
+      135deg,
+      #1e40af 0%,
+      #2563eb 40%,
+      #3b82f6 70%,
+      #60a5fa 100%
+    );
+  }
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-brand-700 to-brand-500;
+  }
+}

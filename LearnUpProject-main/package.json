@@ -1,0 +1,11 @@
+{
+  "name": "learnup-project",
+  "private": true,
+  "description": "Root scripts — frontend lives in ./frontend",
+  "scripts": {
+    "install:frontend": "npm install --prefix frontend",
+    "dev": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "preview": "npm run preview --prefix frontend"
+  }
+}
