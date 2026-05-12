@@ -23,8 +23,8 @@ This backend can now run as a standalone FastAPI service on Render or Vercel.
 
 Use a separate Vercel project for the backend and set the project's Root Directory to `backend`.
 
-- Vercel will detect [app.py](./app.py) as the FastAPI entrypoint
-- [vercel.json](./vercel.json) includes the chatbot KB files and excludes `venv`, uploads, and caches
+- Vercel will detect [app.py](./app.py) as the FastAPI entrypoint with zero configuration
+- The chatbot files now live under `backend/Chatbot`, so they are available from the backend root directory without extra Vercel config
 
 Important:
 

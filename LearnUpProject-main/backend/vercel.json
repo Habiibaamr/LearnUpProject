@@ -1,9 +1,0 @@
-{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "app.py": {
-      "includeFiles": "Chatbot/**",
-      "excludeFiles": "{venv/**,venv.broken-*/**,uploads/**,__pycache__/**,**/__pycache__/**,.env,.env.local,test_db.py}"
-    }
-  }
-}
