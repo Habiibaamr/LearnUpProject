@@ -1,6 +1,6 @@
 # Backend Deploy Notes
 
-This backend can now run as a standalone FastAPI service on Render.
+This backend can now run as a standalone FastAPI service on Render or Vercel.
 
 ## Minimum environment variables
 
@@ -16,6 +16,20 @@ This backend can now run as a standalone FastAPI service on Render.
   Single frontend URL to append to the allow-list.
 - `UPLOADS_DIR`
   Absolute path for uploaded files if you attach persistent storage.
+- `CHATBOT_DATA_DIR`
+  Optional override for the knowledge-base folder used by the chatbot.
+
+## Vercel setup
+
+Use a separate Vercel project for the backend and set the project's Root Directory to `backend`.
+
+- Vercel will detect [app.py](./app.py) as the FastAPI entrypoint
+- [vercel.json](./vercel.json) includes the chatbot KB files and excludes `venv`, uploads, and caches
+
+Important:
+
+- The repo root [vercel.json](../vercel.json) uses Vercel Services, which is currently in Private Beta
+- For now, backend-only deployment on Vercel should point to the `backend` folder, not the repo root
 
 ## Render setup
 
