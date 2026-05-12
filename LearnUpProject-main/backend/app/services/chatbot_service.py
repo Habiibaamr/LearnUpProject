@@ -89,8 +89,18 @@ def _resolve_llm_settings() -> tuple[str, str, str]:
 
 def _kb_data_dir() -> Path:
     """Folder containing *.md knowledge bases (usually Project/Chatbot)."""
-    root = _project_root()
+    env_dir = (os.getenv("CHATBOT_DATA_DIR") or "").strip()
+    if env_dir:
+        p = Path(env_dir).expanduser()
+        if p.is_dir():
+            return p
+
+    backend_dir = _backend_root() / "Chatbot"
     marker = "massive_academic_advising_kb.md"
+    if (backend_dir / marker).is_file():
+        return backend_dir
+
+    root = _project_root()
     for name in ("Chatbot", "project"):
         d = root / name
         if (d / marker).is_file():
