@@ -16,7 +16,6 @@ from app.schemas.chat import (
     ChatSourceItem,
     ChatStartResponse,
 )
-from app.services import chatbot_service
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -71,6 +70,8 @@ def send_chat_message(
     current_user: User = Depends(require_student),
     db: Session = Depends(get_db),
 ):
+    from app.services import chatbot_service
+
     _get_owned_session(db, session_id, current_user.id)
 
     user_msg = ChatMessage(
