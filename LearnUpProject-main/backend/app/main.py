@@ -44,10 +44,13 @@ else:
 
 app = FastAPI()
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_UPLOADS_DIR = (
+    Path("/tmp/learnup-uploads") if os.getenv("VERCEL") else _BACKEND_ROOT / "uploads"
+)
 _UPLOADS_DIR = (
     Path(os.getenv("UPLOADS_DIR")).expanduser().resolve()
     if os.getenv("UPLOADS_DIR")
-    else _BACKEND_ROOT / "uploads"
+    else _DEFAULT_UPLOADS_DIR
 )
 _UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(_UPLOADS_DIR)), name="uploads")
