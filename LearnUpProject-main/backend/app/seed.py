@@ -1,10 +1,13 @@
 """
-Seed Learnup_db with coherent dummy data. Run from the backend folder:
+Seed Learnup_db with coherent demo data. Run from the backend folder:
     python app/seed.py
 
 Development note: `Base.metadata.create_all()` does not add columns to existing tables.
 This script drops and recreates `course_registrations` and `course_prerequisites` so
 their schema matches the models, then reseeds all data (full wipe via clear_all).
+
+WARNING: This script deletes users/admins/instructors/students. For an existing
+demo database, prefer scripts/seed_real_academic_data.py.
 """
 import sys
 from datetime import date, datetime, time, timedelta, timezone
@@ -19,6 +22,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.core.database import Base, SessionLocal, engine  # noqa: E402
+from app.academic_catalog import (  # noqa: E402
+    COURSE_PREREQUISITES,
+    MAX_DEMO_SEMESTERS,
+    REALISTIC_COURSE_CATALOG,
+)
 import app.models  # noqa: E402, F401 — register ORM tables on Base.metadata
 from app.models.admin import Admin  # noqa: E402
 from app.models.chat_message import ChatMessage  # noqa: E402
@@ -41,6 +49,12 @@ from app.models.super_admin import SuperAdmin  # noqa: E402
 from app.models.user import User  # noqa: E402
 
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Saturday"]
+DEMO_DEPARTMENTS = [
+    (1, "Artificial Intelligence", "AI"),
+    (2, "Information System", "IS"),
+    (3, "Cyber Security", "CY"),
+    (4, "Computer Science", "CS"),
+]
 
 
 def _dev_reset_registration_tables() -> None:
@@ -117,55 +131,68 @@ def seed() -> None:
             )
         session.commit()
 
-        for i in range(1, 101):
-            faculty_id = ((i - 1) % 100) + 1
+        for department_id, name, code in DEMO_DEPARTMENTS:
             session.add(
                 Department(
-                    name=f"Department {i}",
-                    code=f"D{i:03d}",
-                    faculty_id=faculty_id,
+                    id=department_id,
+                    name=name,
+                    code=code,
+                    faculty_id=1,
                 )
             )
         session.commit()
 
-        base = date(2024, 1, 1)
-        for i in range(1, 101):
-            start = base + timedelta(days=(i - 1) * 30)
-            end = start + timedelta(days=120)
+        base = date(2025, 9, 1)
+        for i in range(1, MAX_DEMO_SEMESTERS + 1):
+            start = base + timedelta(days=(i - 1) * 120)
+            end = start + timedelta(days=105)
             session.add(
                 Semester(
                     name=f"Semester {i}",
                     start_date=start,
                     end_date=end,
-                    is_active=(i % 10 != 0),
+                    is_active=True,
                 )
             )
         session.commit()
 
-        for i in range(1, 101):
-            fid = ((i - 1) % 100) + 1
-            did = ((i - 1) % 100) + 1
+        for catalog_course in REALISTIC_COURSE_CATALOG:
             session.add(
                 Course(
-                    course_code=f"CSE{i:04d}",
-                    title=f"Introduction to Topic {i}",
-                    credit_hours=((i - 1) % 4) + 2,
-                    faculty_id=fid,
-                    department_id=did,
-                    level=((i - 1) % 4) + 1,
-                    description=f"Course description for item {i}.",
+                    course_code=catalog_course.code,
+                    title=catalog_course.title,
+                    credit_hours=catalog_course.credit_hours,
+                    faculty_id=1,
+                    department_id=4,
+                    level=catalog_course.level,
+                    description=(
+                        f"{catalog_course.title} for Semester {catalog_course.semester} "
+                        "in the Computer Science demo catalog."
+                    ),
                 )
             )
         session.commit()
 
-        for i in range(1, 101):
-            prerequisite_course_id = i - 1 if i > 1 else 99
-            session.add(
-                CoursePrerequisite(
-                    course_id=i,
-                    prerequisite_course_id=prerequisite_course_id,
+        courses_by_code = {
+            course.course_code: course
+            for course in session.query(Course)
+            .filter(Course.course_code.in_([course.code for course in REALISTIC_COURSE_CATALOG]))
+            .all()
+        }
+        for course_code, prerequisite_codes in COURSE_PREREQUISITES.items():
+            course = courses_by_code.get(course_code)
+            if course is None:
+                continue
+            for prerequisite_code in prerequisite_codes:
+                prerequisite = courses_by_code.get(prerequisite_code)
+                if prerequisite is None:
+                    continue
+                session.add(
+                    CoursePrerequisite(
+                        course_id=course.id,
+                        prerequisite_course_id=prerequisite.id,
+                    )
                 )
-            )
         session.commit()
 
         session.add(
@@ -181,7 +208,7 @@ def seed() -> None:
         for i in range(1, 31):
             uid = 10 + i
             fid = ((i - 1) % 100) + 1
-            did = ((i - 1) % 100) + 1
+            did = ((i - 1) % len(DEMO_DEPARTMENTS)) + 1
             session.add(
                 Instructor(
                     user_id=uid,
@@ -197,7 +224,7 @@ def seed() -> None:
         for i in range(1, 101):
             uid = 40 + i
             fid = ((i - 1) % 100) + 1
-            did = ((i - 1) % 100) + 1
+            did = ((i - 1) % len(DEMO_DEPARTMENTS)) + 1
             adv = ((i - 1) % 30) + 1
             session.add(
                 Student(
@@ -214,68 +241,80 @@ def seed() -> None:
             )
         session.commit()
 
-        for i in range(1, 101):
-            coord = ((i - 1) % 30) + 1
+        semesters_by_number = {
+            int(semester.name.split()[-1]): semester
+            for semester in session.query(Semester).all()
+            if semester.name.startswith("Semester ")
+        }
+        for index, catalog_course in enumerate(REALISTIC_COURSE_CATALOG):
+            course = courses_by_code[catalog_course.code]
+            semester = semesters_by_number[catalog_course.semester]
+            coord = (index % 30) + 1
             session.add(
                 CourseOffering(
-                    course_id=i,
-                    semester_id=i,
+                    course_id=course.id,
+                    semester_id=semester.id,
                     coordinator_instructor_id=coord,
                     status="open",
                 )
             )
         session.commit()
 
-        for i in range(1, 101):
-            inst_id = ((i - 1) % 30) + 1
+        offering_ids = [
+            row.id for row in session.query(CourseOffering).order_by(CourseOffering.id.asc()).all()
+        ]
+        for index, offering_id in enumerate(offering_ids):
+            inst_id = (index % 30) + 1
             session.add(
                 CourseInstructor(
-                    course_offering_id=i,
+                    course_offering_id=offering_id,
                     instructor_id=inst_id,
                 )
             )
         session.commit()
 
-        for i in range(1, 101):
-            inst_id = ((i - 1) % 30) + 1
+        for index, offering_id in enumerate(offering_ids, start=1):
+            inst_id = ((index - 1) % 30) + 1
             session.add(
                 LectureGroup(
-                    course_offering_id=i,
-                    group_code=f"LEC-{i:03d}",
+                    course_offering_id=offering_id,
+                    group_code=f"LEC-{index:03d}",
                     instructor_id=inst_id,
-                    day_of_week=DAYS[(i - 1) % len(DAYS)],
-                    start_time=time(9 + (i % 3), (i * 5) % 60),
-                    end_time=time(10 + (i % 3), (i * 7) % 60),
-                    room=f"Hall {100 + (i % 50)}",
+                    day_of_week=DAYS[(index - 1) % len(DAYS)],
+                    start_time=time(9 + (index % 3), (index * 5) % 60),
+                    end_time=time(10 + (index % 3), (index * 7) % 60),
+                    room=f"Hall {100 + (index % 50)}",
                     capacity=100,
                 )
             )
         session.commit()
 
-        for i in range(1, 101):
-            inst_id = ((i - 1) % 30) + 1
+        for index, offering_id in enumerate(offering_ids, start=1):
+            inst_id = ((index - 1) % 30) + 1
             session.add(
                 SectionGroup(
-                    course_offering_id=i,
-                    group_code=f"SEC-{i:03d}",
+                    course_offering_id=offering_id,
+                    group_code=f"SEC-{index:03d}",
                     instructor_id=inst_id,
-                    day_of_week=DAYS[(i + 1) % len(DAYS)],
-                    start_time=time(11 + (i % 2), (i * 3) % 60),
-                    end_time=time(12 + (i % 2), (i * 11) % 60),
-                    room=f"Lab {200 + (i % 40)}",
+                    day_of_week=DAYS[(index + 1) % len(DAYS)],
+                    start_time=time(11 + (index % 2), (index * 3) % 60),
+                    end_time=time(12 + (index % 2), (index * 11) % 60),
+                    room=f"Lab {200 + (index % 40)}",
                     capacity=30,
                 )
             )
         session.commit()
 
         now_utc = datetime.now(timezone.utc)
+        offering_cycle = offering_ids or [1]
         for i in range(1, 101):
             added_by = 1 + ((i - 1) % 40)
+            course_offering_id = offering_cycle[(i - 1) % len(offering_cycle)]
             if i <= 40:
                 session.add(
                     CourseRegistration(
                         student_id=i,
-                        course_offering_id=i,
+                        course_offering_id=course_offering_id,
                         status="completed",
                         added_by_user_id=added_by,
                         final_grade="A"
@@ -289,7 +328,7 @@ def seed() -> None:
                 session.add(
                     CourseRegistration(
                         student_id=i,
-                        course_offering_id=i,
+                        course_offering_id=course_offering_id,
                         status="completed",
                         added_by_user_id=added_by,
                         final_grade="F",
@@ -301,7 +340,7 @@ def seed() -> None:
                 session.add(
                     CourseRegistration(
                         student_id=i,
-                        course_offering_id=i,
+                        course_offering_id=course_offering_id,
                         status="registered",
                         added_by_user_id=added_by,
                         final_grade=None,
@@ -311,20 +350,28 @@ def seed() -> None:
                 )
         session.commit()
 
+        lecture_group_ids = [
+            row.id for row in session.query(LectureGroup).order_by(LectureGroup.id.asc()).all()
+        ]
+        section_group_ids = [
+            row.id for row in session.query(SectionGroup).order_by(SectionGroup.id.asc()).all()
+        ]
         for i in range(1, 101):
+            lecture_group_id = lecture_group_ids[(i - 1) % len(lecture_group_ids)]
             session.add(
                 LectureRegistration(
                     student_id=i,
-                    lecture_group_id=i,
+                    lecture_group_id=lecture_group_id,
                 )
             )
         session.commit()
 
         for i in range(1, 101):
+            section_group_id = section_group_ids[(i - 1) % len(section_group_ids)]
             session.add(
                 SectionRegistration(
                     student_id=i,
-                    section_group_id=i,
+                    section_group_id=section_group_id,
                 )
             )
         session.commit()
@@ -345,7 +392,7 @@ def seed() -> None:
             )
         session.commit()
 
-        print("Dummy data inserted successfully!")
+        print("Realistic demo data inserted successfully!")
     finally:
         session.close()
 

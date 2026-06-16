@@ -31,6 +31,31 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/webp": ".webp",
 }
 MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024
+ALLOWED_DEPARTMENTS = {
+    1: "Artificial Intelligence",
+    2: "Information System",
+    3: "Cyber Security",
+    4: "Computer Science",
+}
+
+
+def _get_department_name(db: Session, department_id: int | None) -> str | None:
+    if department_id is None:
+        return None
+
+    if department_id in ALLOWED_DEPARTMENTS:
+        return ALLOWED_DEPARTMENTS[department_id]
+
+    dep = db.query(Department).filter(Department.id == department_id).first()
+    if dep is None:
+        return None
+
+    normalized_name = dep.name.strip().lower()
+    for allowed_name in ALLOWED_DEPARTMENTS.values():
+        if normalized_name == allowed_name.lower():
+            return allowed_name
+
+    return None
 
 
 def _get_student_profile(db: Session, current_user: User) -> Student:
@@ -102,9 +127,9 @@ def _student_card_payload(
             faculty_name = fac.name
             faculty_code = fac.code
     if student.department_id is not None:
+        department_name = _get_department_name(db, student.department_id)
         dep = db.query(Department).filter(Department.id == student.department_id).first()
         if dep is not None:
-            department_name = dep.name
             department_code = dep.code
     advisor_name = None
     if student.advisor_instructor_id is not None:

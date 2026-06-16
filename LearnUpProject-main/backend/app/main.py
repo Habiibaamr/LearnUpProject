@@ -57,9 +57,10 @@ app.mount("/uploads", StaticFiles(directory=str(_UPLOADS_DIR)), name="uploads")
 
 
 def _cors_settings() -> tuple[list[str], bool]:
-    local_origins = [
+    required_origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://learn-up-frontend-gamma.vercel.app",
         "http://localhost:4173",
         "http://127.0.0.1:4173",
         "http://localhost:3000",
@@ -70,13 +71,11 @@ def _cors_settings() -> tuple[list[str], bool]:
     if raw == "*":
         return ["*"], True
 
-    origins: list[str] = []
+    origins: list[str] = [*required_origins]
     if raw:
         origins.extend(part.strip().rstrip("/") for part in raw.split(",") if part.strip())
     if frontend_url:
         origins.append(frontend_url.rstrip("/"))
-    if not origins:
-        origins = local_origins
 
     return list(dict.fromkeys(origins)), False
 
@@ -97,9 +96,13 @@ def _log_loaded_code_paths() -> None:
 _cors_origins, _allow_all_cors = _cors_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[] if _allow_all_cors else _cors_origins,
+    allow_origins=[  
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://learn-up-frontend-gamma.vercel.app",
+    ] if _allow_all_cors else _cors_origins,
     allow_origin_regex=".*" if _allow_all_cors else None,
-    allow_credentials=not _allow_all_cors,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

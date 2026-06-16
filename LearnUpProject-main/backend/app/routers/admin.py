@@ -3,6 +3,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.academic_catalog import parse_semester_number
 from app.core.database import get_db
 from app.core.security import (
     ROLE_ADMIN,
@@ -17,7 +18,9 @@ from app.models.admin import Admin as AdminProfile
 from app.models.course import Course
 from app.models.course_instructor import CourseInstructor
 from app.models.course_offering import CourseOffering
+from app.models.department import Department
 from app.models.instructor import Instructor
+from app.models.semester import Semester
 from app.models.student import Student
 from app.models.super_admin import SuperAdmin as SuperAdminProfile
 from app.models.user import User
@@ -38,6 +41,13 @@ from app.services.academic_terms import (
 from app.services.grade_posting import get_window_status, set_window_status
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+ALLOWED_DEPARTMENTS = {
+    1: "Artificial Intelligence",
+    2: "Information System",
+    3: "Cyber Security",
+    4: "Computer Science",
+}
 
 
 def _generate_university_id(db: Session, role: str) -> str:
@@ -65,8 +75,42 @@ def _generate_university_id(db: Session, role: str) -> str:
     return candidate
 
 
+def _get_department_name(db: Session, department_id: int | None) -> str | None:
+    if department_id is None:
+        return None
+
+    if department_id in ALLOWED_DEPARTMENTS:
+        return ALLOWED_DEPARTMENTS[department_id]
+
+    department = db.query(Department).filter(Department.id == department_id).first()
+    if department is None:
+        return None
+
+    normalized_name = department.name.strip().lower()
+    for allowed_name in ALLOWED_DEPARTMENTS.values():
+        if normalized_name == allowed_name.lower():
+            return allowed_name
+
+    return None
+
+
+def _validate_department_id(department_id: int | None) -> int | None:
+    if department_id is None:
+        return None
+
+    if department_id not in ALLOWED_DEPARTMENTS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Department must be one of AI, Information System, Cyber Security, or CS",
+        )
+
+    return department_id
+
+
 def _user_public_dict(db: Session, u: User) -> dict:
     position = None
+    profile_payload = {}
+
     if u.role == ROLE_ADMIN:
         admin_profile = (
             db.query(AdminProfile)
@@ -83,6 +127,21 @@ def _user_public_dict(db: Session, u: User) -> dict:
         position = (
             super_admin_profile.position if super_admin_profile is not None else None
         )
+    elif u.role == ROLE_STUDENT:
+        student_profile = (
+            db.query(Student)
+            .filter(Student.user_id == u.id)
+            .first()
+        )
+        if student_profile is not None:
+            profile_payload = {
+                "student_id": student_profile.id,
+                "department_id": student_profile.department_id,
+                "department_name": _get_department_name(db, student_profile.department_id),
+                "level": student_profile.level,
+                "phone": student_profile.phone,
+            }
+
     return {
         "id": u.id,
         "university_id": u.university_id,
@@ -92,6 +151,7 @@ def _user_public_dict(db: Session, u: User) -> dict:
         "is_active": u.is_active,
         "position": position,
         "created_at": u.created_at,
+        **profile_payload,
     }
 
 
@@ -130,6 +190,13 @@ def list_instructors(
                 "university_id": user.university_id,
                 "full_name": user.full_name,
                 "email": user.email,
+                "faculty_id": row.faculty_id,
+                "department_id": row.department_id,
+                "department_name": _get_department_name(db, row.department_id),
+                "specialization": row.specialization,
+                "office_location": row.office_location,
+                "phone": row.phone,
+                "created_at": row.created_at,
             }
         )
     return result
@@ -146,6 +213,8 @@ def list_course_offerings(
         course = db.query(Course).filter(Course.id == row.course_id).first()
         if course is None:
             continue
+        semester = db.query(Semester).filter(Semester.id == row.semester_id).first()
+        semester_name = semester.name if semester is not None else None
         result.append(
             {
                 "course_offering_id": row.id,
@@ -153,6 +222,8 @@ def list_course_offerings(
                 "course_code": course.course_code,
                 "course_title": course.title,
                 "semester_id": row.semester_id,
+                "semester_name": semester_name,
+                "semester_number": parse_semester_number(semester_name) or row.semester_id,
                 "status": row.status,
             }
         )
@@ -171,6 +242,7 @@ def create_student_account(
             detail="Email already registered",
         )
     generated_university_id = _generate_university_id(db, role="student")
+    department_id = _validate_department_id(body.department_id)
 
     password_hash = bcrypt.hashpw(body.password.encode("utf-8"), bcrypt.gensalt()).decode(
         "utf-8"
@@ -189,7 +261,7 @@ def create_student_account(
     student = Student(
         user_id=user.id,
         faculty_id=body.faculty_id,
-        department_id=body.department_id,
+        department_id=department_id,
         level=body.level,
         cgpa=body.cgpa,
         passed_credit_hours=body.passed_credit_hours,
@@ -209,6 +281,7 @@ def create_student_account(
             "photo_url": student.photo_url,
             "faculty_id": student.faculty_id,
             "department_id": student.department_id,
+            "department_name": _get_department_name(db, student.department_id),
             "level": student.level,
             "cgpa": student.cgpa,
             "passed_credit_hours": student.passed_credit_hours,
@@ -231,6 +304,7 @@ def create_instructor_account(
             detail="Email already registered",
         )
     generated_university_id = _generate_university_id(db, role="instructor")
+    department_id = _validate_department_id(body.department_id)
 
     password_hash = bcrypt.hashpw(body.password.encode("utf-8"), bcrypt.gensalt()).decode(
         "utf-8"
@@ -249,7 +323,7 @@ def create_instructor_account(
     instructor = Instructor(
         user_id=user.id,
         faculty_id=body.faculty_id,
-        department_id=body.department_id,
+        department_id=department_id,
         specialization=body.specialization,
         office_location=body.office_location,
         phone=body.phone,
@@ -266,6 +340,7 @@ def create_instructor_account(
             "user_id": instructor.user_id,
             "faculty_id": instructor.faculty_id,
             "department_id": instructor.department_id,
+            "department_name": _get_department_name(db, instructor.department_id),
             "specialization": instructor.specialization,
             "office_location": instructor.office_location,
             "phone": instructor.phone,
