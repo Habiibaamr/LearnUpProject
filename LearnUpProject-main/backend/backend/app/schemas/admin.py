@@ -27,31 +27,6 @@ class CreateInstructorAccountRequest(BaseModel):
     phone: Optional[str] = None
 
 
-class UpdateStudentRequest(BaseModel):
-    full_name: Optional[str] = Field(default=None, min_length=1)
-    email: Optional[EmailStr] = None
-    faculty_id: Optional[int] = None
-    department_id: Optional[int] = None
-    level: Optional[int] = None
-    phone: Optional[str] = None
-    gender: Optional[str] = None
-    national_id: Optional[str] = None
-
-
-class UpdateInstructorRequest(BaseModel):
-    full_name: Optional[str] = Field(default=None, min_length=1)
-    email: Optional[EmailStr] = None
-    faculty_id: Optional[int] = None
-    department_id: Optional[int] = None
-    specialization: Optional[str] = None
-    office_location: Optional[str] = None
-    phone: Optional[str] = None
-    gender: Optional[str] = None
-    national_id: Optional[str] = None
-    academic_position: Optional[str] = None
-    role: Optional[str] = None
-
-
 class CreateAdminAccountRequest(BaseModel):
     full_name: str = Field(min_length=1)
     email: EmailStr

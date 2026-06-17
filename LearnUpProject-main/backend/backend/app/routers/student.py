@@ -31,31 +31,6 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/webp": ".webp",
 }
 MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024
-ALLOWED_DEPARTMENTS = {
-    1: "Artificial Intelligence",
-    2: "Information System",
-    3: "Cyber Security",
-    4: "Computer Science",
-}
-
-
-def _get_department_name(db: Session, department_id: int | None) -> str | None:
-    if department_id is None:
-        return None
-
-    if department_id in ALLOWED_DEPARTMENTS:
-        return ALLOWED_DEPARTMENTS[department_id]
-
-    dep = db.query(Department).filter(Department.id == department_id).first()
-    if dep is None:
-        return None
-
-    normalized_name = dep.name.strip().lower()
-    for allowed_name in ALLOWED_DEPARTMENTS.values():
-        if normalized_name == allowed_name.lower():
-            return allowed_name
-
-    return None
 
 
 def _get_student_profile(db: Session, current_user: User) -> Student:
@@ -112,13 +87,11 @@ def _require_active_course_registration(
         )
 
 
-def _build_student_profile_payload(
-    db: Session, current_user: User, response: Response | None = None
+def _student_card_payload(
+    db: Session, current_user: User, response: Response
 ) -> dict:
     student = _get_student_profile(db, current_user)
-    if response is not None:
-        response.headers["X-LearnUp-Student-Card"] = "v2"
-
+    response.headers["X-LearnUp-Student-Card"] = "v2"
     faculty_name = None
     faculty_code = None
     department_name = None
@@ -129,9 +102,9 @@ def _build_student_profile_payload(
             faculty_name = fac.name
             faculty_code = fac.code
     if student.department_id is not None:
-        department_name = _get_department_name(db, student.department_id)
         dep = db.query(Department).filter(Department.id == student.department_id).first()
         if dep is not None:
+            department_name = dep.name
             department_code = dep.code
     advisor_name = None
     if student.advisor_instructor_id is not None:
@@ -144,11 +117,9 @@ def _build_student_profile_payload(
             adv_user = db.query(User).filter(User.id == inst.user_id).first()
             if adv_user is not None:
                 advisor_name = adv_user.full_name
-
     return {
         "student_card_api": "v2-ensure-row",
         "user_id": current_user.id,
-        "student_id": student.id,
         "university_id": current_user.university_id,
         "full_name": current_user.full_name,
         "email": current_user.email,
@@ -168,30 +139,6 @@ def _build_student_profile_payload(
         "advisor_instructor_id": student.advisor_instructor_id,
         "advisor_name": advisor_name,
     }
-
-
-def _student_card_payload(
-    db: Session, current_user: User, response: Response
-) -> dict:
-    return _build_student_profile_payload(db, current_user, response)
-
-
-@router.get("/profile")
-def get_student_profile(
-    current_user: User = Depends(require_student),
-    db: Session = Depends(get_db),
-):
-    """Student-safe profile endpoint used by the dashboard and profile pages."""
-    return _build_student_profile_payload(db, current_user)
-
-
-@router.get("/me")
-def get_student_me(
-    current_user: User = Depends(require_student),
-    db: Session = Depends(get_db),
-):
-    """Alias for the student profile endpoint used by the frontend."""
-    return _build_student_profile_payload(db, current_user)
 
 
 @router.get("/me/card")

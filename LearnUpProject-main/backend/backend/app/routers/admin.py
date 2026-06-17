@@ -18,13 +18,7 @@ from app.models.admin import Admin as AdminProfile
 from app.models.course import Course
 from app.models.course_instructor import CourseInstructor
 from app.models.course_offering import CourseOffering
-from app.models.course_registration import CourseRegistration
-from app.models.department import Department
 from app.models.instructor import Instructor
-from app.models.lecture_group import LectureGroup
-from app.models.lecture_registration import LectureRegistration
-from app.models.section_group import SectionGroup
-from app.models.section_registration import SectionRegistration
 from app.models.semester import Semester
 from app.models.student import Student
 from app.models.super_admin import SuperAdmin as SuperAdminProfile
@@ -38,8 +32,6 @@ from app.schemas.admin import (
     CreateStudentAccountRequest,
     OpenFinalGradesWindowRequest,
     UpdateAdminAccountRequest,
-    UpdateInstructorRequest,
-    UpdateStudentRequest,
 )
 from app.services.academic_terms import (
     complete_term_for_all_students,
@@ -48,13 +40,6 @@ from app.services.academic_terms import (
 from app.services.grade_posting import get_window_status, set_window_status
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-ALLOWED_DEPARTMENTS = {
-    1: "Artificial Intelligence",
-    2: "Information System",
-    3: "Cyber Security",
-    4: "Computer Science",
-}
 
 
 def _generate_university_id(db: Session, role: str) -> str:
@@ -82,42 +67,8 @@ def _generate_university_id(db: Session, role: str) -> str:
     return candidate
 
 
-def _get_department_name(db: Session, department_id: int | None) -> str | None:
-    if department_id is None:
-        return None
-
-    if department_id in ALLOWED_DEPARTMENTS:
-        return ALLOWED_DEPARTMENTS[department_id]
-
-    department = db.query(Department).filter(Department.id == department_id).first()
-    if department is None:
-        return None
-
-    normalized_name = department.name.strip().lower()
-    for allowed_name in ALLOWED_DEPARTMENTS.values():
-        if normalized_name == allowed_name.lower():
-            return allowed_name
-
-    return None
-
-
-def _validate_department_id(department_id: int | None) -> int | None:
-    if department_id is None:
-        return None
-
-    if department_id not in ALLOWED_DEPARTMENTS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Department must be one of Artificial Intelligence, Information System, Cyber Security, or Computer Science",
-        )
-
-    return department_id
-
-
 def _user_public_dict(db: Session, u: User) -> dict:
     position = None
-    profile_payload = {}
-
     if u.role == ROLE_ADMIN:
         admin_profile = (
             db.query(AdminProfile)
@@ -134,21 +85,6 @@ def _user_public_dict(db: Session, u: User) -> dict:
         position = (
             super_admin_profile.position if super_admin_profile is not None else None
         )
-    elif u.role == ROLE_STUDENT:
-        student_profile = (
-            db.query(Student)
-            .filter(Student.user_id == u.id)
-            .first()
-        )
-        if student_profile is not None:
-            profile_payload = {
-                "student_id": student_profile.id,
-                "department_id": student_profile.department_id,
-                "department_name": _get_department_name(db, student_profile.department_id),
-                "level": student_profile.level,
-                "phone": student_profile.phone,
-            }
-
     return {
         "id": u.id,
         "university_id": u.university_id,
@@ -158,51 +94,7 @@ def _user_public_dict(db: Session, u: User) -> dict:
         "is_active": u.is_active,
         "position": position,
         "created_at": u.created_at,
-        **profile_payload,
     }
-
-
-def _student_public_dict(db: Session, student: Student) -> dict:
-    return {
-        "id": student.id,
-        "student_id": student.id,
-        "user_id": student.user_id,
-        "photo_url": student.photo_url,
-        "faculty_id": student.faculty_id,
-        "faculty_name": None,
-        "department_id": student.department_id,
-        "department_name": _get_department_name(db, student.department_id),
-        "level": student.level,
-        "cgpa": student.cgpa,
-        "passed_credit_hours": student.passed_credit_hours,
-        "phone": student.phone,
-        "advisor_instructor_id": student.advisor_instructor_id,
-        "created_at": student.created_at,
-    }
-
-
-def _instructor_public_dict(db: Session, instructor: Instructor) -> dict:
-    return {
-        "id": instructor.id,
-        "instructor_id": instructor.id,
-        "user_id": instructor.user_id,
-        "faculty_id": instructor.faculty_id,
-        "faculty_name": None,
-        "department_id": instructor.department_id,
-        "department_name": _get_department_name(db, instructor.department_id),
-        "specialization": instructor.specialization,
-        "office_location": instructor.office_location,
-        "phone": instructor.phone,
-        "created_at": instructor.created_at,
-    }
-
-
-def _get_student_profile_by_id(db: Session, student_id: int) -> Student | None:
-    return db.query(Student).filter(Student.id == student_id).first()
-
-
-def _get_instructor_profile_by_id(db: Session, instructor_id: int) -> Instructor | None:
-    return db.query(Instructor).filter(Instructor.id == instructor_id).first()
 
 
 def _get_admin_user_by_id(db: Session, user_id: int) -> User | None:
@@ -235,10 +127,11 @@ def list_instructors(
             continue
         result.append(
             {
+                "instructor_id": row.id,
+                "user_id": user.id,
                 "university_id": user.university_id,
                 "full_name": user.full_name,
                 "email": user.email,
-                **_instructor_public_dict(db, row),
             }
         )
     return result
@@ -284,7 +177,6 @@ def create_student_account(
             detail="Email already registered",
         )
     generated_university_id = _generate_university_id(db, role="student")
-    department_id = _validate_department_id(body.department_id)
 
     password_hash = bcrypt.hashpw(body.password.encode("utf-8"), bcrypt.gensalt()).decode(
         "utf-8"
@@ -303,7 +195,7 @@ def create_student_account(
     student = Student(
         user_id=user.id,
         faculty_id=body.faculty_id,
-        department_id=department_id,
+        department_id=body.department_id,
         level=body.level,
         cgpa=body.cgpa,
         passed_credit_hours=body.passed_credit_hours,
@@ -318,7 +210,17 @@ def create_student_account(
     return {
         "user": _user_public_dict(db, user),
         "student": {
-            **_student_public_dict(db, student),
+            "id": student.id,
+            "user_id": student.user_id,
+            "photo_url": student.photo_url,
+            "faculty_id": student.faculty_id,
+            "department_id": student.department_id,
+            "level": student.level,
+            "cgpa": student.cgpa,
+            "passed_credit_hours": student.passed_credit_hours,
+            "phone": student.phone,
+            "advisor_instructor_id": student.advisor_instructor_id,
+            "created_at": student.created_at,
         },
     }
 
@@ -335,7 +237,6 @@ def create_instructor_account(
             detail="Email already registered",
         )
     generated_university_id = _generate_university_id(db, role="instructor")
-    department_id = _validate_department_id(body.department_id)
 
     password_hash = bcrypt.hashpw(body.password.encode("utf-8"), bcrypt.gensalt()).decode(
         "utf-8"
@@ -354,7 +255,7 @@ def create_instructor_account(
     instructor = Instructor(
         user_id=user.id,
         faculty_id=body.faculty_id,
-        department_id=department_id,
+        department_id=body.department_id,
         specialization=body.specialization,
         office_location=body.office_location,
         phone=body.phone,
@@ -367,196 +268,16 @@ def create_instructor_account(
     return {
         "user": _user_public_dict(db, user),
         "instructor": {
-            **_instructor_public_dict(db, instructor),
+            "id": instructor.id,
+            "user_id": instructor.user_id,
+            "faculty_id": instructor.faculty_id,
+            "department_id": instructor.department_id,
+            "specialization": instructor.specialization,
+            "office_location": instructor.office_location,
+            "phone": instructor.phone,
+            "created_at": instructor.created_at,
         },
     }
-
-
-@router.put("/students/{student_id}")
-def update_student(
-    student_id: int,
-    body: UpdateStudentRequest,
-    _admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    student = _get_student_profile_by_id(db, student_id)
-    if student is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student not found",
-        )
-    user = db.query(User).filter(User.id == student.user_id).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student user not found",
-        )
-
-    if body.email and body.email != user.email:
-        existing = db.query(User).filter(User.email == body.email).first()
-        if existing is not None and existing.id != user.id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered",
-            )
-        user.email = body.email
-
-    if body.full_name is not None:
-        user.full_name = body.full_name
-    if body.faculty_id is not None:
-        student.faculty_id = body.faculty_id
-    if body.department_id is not None:
-        student.department_id = _validate_department_id(body.department_id)
-    if body.level is not None:
-        student.level = body.level
-    if body.phone is not None:
-        student.phone = body.phone
-
-    db.commit()
-    db.refresh(user)
-    db.refresh(student)
-
-    return {
-        "message": "Student updated successfully",
-        "user": _user_public_dict(db, user),
-        "student": _student_public_dict(db, student),
-    }
-
-
-@router.delete("/students/{student_id}")
-def delete_student(
-    student_id: int,
-    _admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    student = _get_student_profile_by_id(db, student_id)
-    if student is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student not found",
-        )
-    user = db.query(User).filter(User.id == student.user_id).first()
-
-    lecture_registration_ids = {
-        row.id
-        for row in db.query(LectureRegistration.id)
-        .filter(LectureRegistration.student_id == student.id)
-        .all()
-    }
-    section_registration_ids = {
-        row.id
-        for row in db.query(SectionRegistration.id)
-        .filter(SectionRegistration.student_id == student.id)
-        .all()
-    }
-
-    if lecture_registration_ids:
-        db.query(LectureRegistration).filter(
-            LectureRegistration.id.in_(lecture_registration_ids)
-        ).delete(synchronize_session=False)
-    if section_registration_ids:
-        db.query(SectionRegistration).filter(
-            SectionRegistration.id.in_(section_registration_ids)
-        ).delete(synchronize_session=False)
-    db.query(CourseRegistration).filter(CourseRegistration.student_id == student.id).delete(
-        synchronize_session=False
-    )
-    db.delete(student)
-    if user is not None:
-        db.delete(user)
-    db.commit()
-
-    return {"message": "Student deleted successfully", "student_id": student_id}
-
-
-@router.put("/instructors/{instructor_id}")
-def update_instructor(
-    instructor_id: int,
-    body: UpdateInstructorRequest,
-    _admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    instructor = _get_instructor_profile_by_id(db, instructor_id)
-    if instructor is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Instructor not found",
-        )
-    user = db.query(User).filter(User.id == instructor.user_id).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Instructor user not found",
-        )
-
-    if body.email and body.email != user.email:
-        existing = db.query(User).filter(User.email == body.email).first()
-        if existing is not None and existing.id != user.id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered",
-            )
-        user.email = body.email
-
-    if body.full_name is not None:
-        user.full_name = body.full_name
-    if body.faculty_id is not None:
-        instructor.faculty_id = body.faculty_id
-    if body.department_id is not None:
-        instructor.department_id = _validate_department_id(body.department_id)
-    if body.specialization is not None:
-        instructor.specialization = body.specialization
-    if body.office_location is not None:
-        instructor.office_location = body.office_location
-    if body.phone is not None:
-        instructor.phone = body.phone
-
-    db.commit()
-    db.refresh(user)
-    db.refresh(instructor)
-
-    return {
-        "message": "Instructor updated successfully",
-        "user": _user_public_dict(db, user),
-        "instructor": _instructor_public_dict(db, instructor),
-    }
-
-
-@router.delete("/instructors/{instructor_id}")
-def delete_instructor(
-    instructor_id: int,
-    _admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    instructor = _get_instructor_profile_by_id(db, instructor_id)
-    if instructor is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Instructor not found",
-        )
-    user = db.query(User).filter(User.id == instructor.user_id).first()
-
-    db.query(CourseInstructor).filter(CourseInstructor.instructor_id == instructor.id).delete(
-        synchronize_session=False
-    )
-    for offering in db.query(CourseOffering).filter(
-        CourseOffering.coordinator_instructor_id == instructor.id
-    ):
-        offering.coordinator_instructor_id = None
-    for lecture_group in db.query(LectureGroup).filter(LectureGroup.instructor_id == instructor.id):
-        lecture_group.instructor_id = None
-    for section_group in db.query(SectionGroup).filter(SectionGroup.instructor_id == instructor.id):
-        section_group.instructor_id = None
-    db.query(Student).filter(Student.advisor_instructor_id == instructor.id).update(
-        {Student.advisor_instructor_id: None},
-        synchronize_session=False,
-    )
-    db.delete(instructor)
-    if user is not None:
-        db.delete(user)
-    db.commit()
-
-    return {"message": "Instructor deleted successfully", "instructor_id": instructor_id}
 
 
 @router.post("/create-admin-account")

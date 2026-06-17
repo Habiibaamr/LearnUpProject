@@ -28,11 +28,3 @@ class UserMeResponse(BaseModel):
     full_name: str
     email: str
     role: str
-    student_id: int | None = None
-    department_id: int | None = None
-    department_name: str | None = None
-    level: int | None = None
-    advisor_instructor_id: int | None = None
-    advisor_name: str | None = None
-    cgpa: float | None = None
-    passed_credit_hours: int | None = None
