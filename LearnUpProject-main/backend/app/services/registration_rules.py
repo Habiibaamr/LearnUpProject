@@ -10,6 +10,8 @@ from app.models.course_prerequisite import CoursePrerequisite
 from app.models.course_registration import CourseRegistration
 from app.models.student import Student
 
+ACTIVE_REGISTRATION_STATUSES = ("registered", "enrolled", "active")
+
 
 def get_student_profile(db: Session, user_id: int) -> Optional[Student]:
     return db.query(Student).filter(Student.user_id == user_id).first()
@@ -82,7 +84,7 @@ def get_current_registered_credit_hours(db: Session, student_id: int) -> int:
         db.query(CourseRegistration)
         .filter(
             CourseRegistration.student_id == student_id,
-            CourseRegistration.status == "registered",
+            CourseRegistration.status.in_(ACTIVE_REGISTRATION_STATUSES),
         )
         .all()
     )

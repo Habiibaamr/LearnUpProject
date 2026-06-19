@@ -157,7 +157,7 @@ def complete_term_for_student(
                 if existing is not None:
                     if registration_rules.has_cleared_course(db, student.id, c.id):
                         continue
-                    if existing.status == "registered":
+                    if existing.status in registration_rules.ACTIVE_REGISTRATION_STATUSES:
                         continue
                     if existing.status == "dropped":
                         existing.status = "registered"

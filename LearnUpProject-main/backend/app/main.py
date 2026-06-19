@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base, engine, get_db
 from app.core.security import require_student
-from app.routers import admin, auth, chat, instructor, student, test
+from app.routers import admin, auth, chat, faculty, instructor, student, test
 from app.models import (  # noqa: F401 — register models with metadata
     Admin,
     ChatMessage,
@@ -109,6 +109,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(faculty.router)
 app.include_router(instructor.router)
 app.include_router(student.router)
 app.include_router(chat.router)

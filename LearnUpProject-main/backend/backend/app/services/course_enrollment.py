@@ -85,7 +85,7 @@ def build_course_board(db: Session, student: Student) -> list[dict]:
     cleared_course_ids: set[int] = set()
     enrolled_offering_by_course_id: dict[int, int] = {}
     for reg, offering in registrations:
-        if reg.status == "registered":
+        if reg.status in registration_rules.ACTIVE_REGISTRATION_STATUSES:
             enrolled_offering_by_course_id[offering.course_id] = offering.id
         if registration_rules.has_cleared_course(db, student.id, offering.course_id):
             cleared_course_ids.add(offering.course_id)
@@ -152,7 +152,9 @@ def enroll_student_by_course_id(
         .filter(
             CourseRegistration.student_id == student.id,
             CourseRegistration.course_offering_id == offering.id,
-            CourseRegistration.status == "registered",
+            CourseRegistration.status.in_(
+                registration_rules.ACTIVE_REGISTRATION_STATUSES
+            ),
         )
         .first()
     )
@@ -185,7 +187,9 @@ def drop_student_by_course_id(db: Session, student: Student, course_id: int) -> 
         .filter(
             CourseRegistration.student_id == student.id,
             CourseOffering.course_id == course_id,
-            CourseRegistration.status == "registered",
+            CourseRegistration.status.in_(
+                registration_rules.ACTIVE_REGISTRATION_STATUSES
+            ),
         )
         .first()
     )

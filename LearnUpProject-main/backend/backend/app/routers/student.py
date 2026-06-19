@@ -76,7 +76,9 @@ def _require_active_course_registration(
         .filter(
             CourseRegistration.student_id == student.id,
             CourseRegistration.course_offering_id == course_offering_id,
-            CourseRegistration.status == "registered",
+            CourseRegistration.status.in_(
+                registration_rules.ACTIVE_REGISTRATION_STATUSES
+            ),
         )
         .first()
     )
@@ -224,7 +226,9 @@ def list_my_registered_courses(
         db.query(CourseRegistration)
         .filter(
             CourseRegistration.student_id == student.id,
-            CourseRegistration.status == "registered",
+            CourseRegistration.status.in_(
+                registration_rules.ACTIVE_REGISTRATION_STATUSES
+            ),
         )
         .all()
     )
@@ -300,7 +304,9 @@ def add_course(
         .filter(
             CourseRegistration.student_id == student.id,
             CourseRegistration.course_offering_id == course_offering_id,
-            CourseRegistration.status == "registered",
+            CourseRegistration.status.in_(
+                registration_rules.ACTIVE_REGISTRATION_STATUSES
+            ),
         )
         .first()
     )
@@ -350,7 +356,9 @@ def drop_course(
         .filter(
             CourseRegistration.student_id == student.id,
             CourseRegistration.course_offering_id == course_offering_id,
-            CourseRegistration.status == "registered",
+            CourseRegistration.status.in_(
+                registration_rules.ACTIVE_REGISTRATION_STATUSES
+            ),
         )
         .first()
     )
