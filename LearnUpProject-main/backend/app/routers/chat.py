@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import require_student
+from app.core.security import get_current_user, require_student
 from app.models.chat_message import ChatMessage
 from app.models.chat_session import ChatSession
 from app.models.user import User
@@ -15,6 +15,9 @@ from app.schemas.chat import (
     ChatSessionOut,
     ChatSourceItem,
     ChatStartResponse,
+    ChatbotHistoryResponse,
+    ChatbotMessageRequest,
+    ChatbotMessageResponse,
 )
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -115,3 +118,94 @@ def list_session_messages(
         .all()
     )
     return [ChatMessageOut.model_validate(m) for m in rows]
+
+
+def _build_chat_context(current_user: User, db: Session) -> str:
+    context_parts = [
+        f"Role: {current_user.role}",
+        f"Name: {current_user.full_name}",
+        f"University ID: {current_user.university_id}",
+    ]
+    return "\n".join(context_parts)
+
+
+@router.post("/chatbot/message", response_model=ChatbotMessageResponse)
+def send_chatbot_message(
+    body: ChatbotMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.services import chatbot_service
+
+    session = None
+    if body.session_id is not None:
+        session = (
+            db.query(ChatSession)
+            .filter(ChatSession.id == body.session_id)
+            .first()
+        )
+        if session is None or session.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session not found",
+            )
+    else:
+        session = ChatSession(user_id=current_user.id)
+        db.add(session)
+        db.flush()
+
+    user_msg = ChatMessage(
+        session_id=session.id,
+        sender_type="user",
+        message_text=body.message,
+    )
+    db.add(user_msg)
+    db.flush()
+
+    context = _build_chat_context(current_user, db)
+    prompt = f"{context}\n\nStudent question: {body.message}"
+    reply = chatbot_service.generate_chatbot_reply(prompt)
+    assistant_text = reply.text.strip() if reply.text else (
+        "I can help with academic advising, but the AI service is not configured yet. "
+        "Please contact your academic advisor."
+    )
+    assistant_msg = ChatMessage(
+        session_id=session.id,
+        sender_type="ai",
+        message_text=assistant_text,
+    )
+    db.add(assistant_msg)
+    db.commit()
+    db.refresh(assistant_msg)
+
+    return ChatbotMessageResponse(
+        session_id=session.id,
+        reply=assistant_text,
+        created_at=assistant_msg.created_at,
+    )
+
+
+@router.get("/chatbot/history", response_model=ChatbotHistoryResponse)
+def get_chatbot_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = (
+        db.query(ChatSession)
+        .filter(ChatSession.user_id == current_user.id)
+        .order_by(ChatSession.id.desc())
+        .first()
+    )
+    if session is None:
+        return ChatbotHistoryResponse(session_id=None, messages=[])
+
+    rows = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session.id)
+        .order_by(ChatMessage.id.asc())
+        .all()
+    )
+    return ChatbotHistoryResponse(
+        session_id=session.id,
+        messages=[ChatMessageOut.model_validate(row) for row in rows],
+    )

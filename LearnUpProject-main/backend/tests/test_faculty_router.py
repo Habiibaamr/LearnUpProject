@@ -22,12 +22,16 @@ from app.models.user import User
 from app.routers.faculty import (
     EnrollStudentsRequest,
     enroll_students_in_course_offering,
+    get_course_offering_available_students,
     get_course_offering_enrollment_students,
     get_course_offering_registrations,
     get_faculty_courses,
     get_faculty_course_offering,
     get_faculty_profile,
     get_faculty_students,
+)
+from scripts.seed_demo_faculty_enrollments import (
+    seed_demo_faculty_enrollments,
 )
 
 
@@ -127,7 +131,7 @@ class FacultyRouterTests(unittest.TestCase):
             faculty_id=faculty.id,
             department_id=department.id,
             level=2,
-            cgpa=3.6,
+            cgpa=None,
             advisor_instructor_id=instructor.id,
         )
         course_student = Student(
@@ -245,6 +249,8 @@ class FacultyRouterTests(unittest.TestCase):
         self.assertEqual(profile["full_name"], "Dr. Faculty Member")
         self.assertEqual(profile["department_name"], "Computer Science")
         self.assertEqual(profile["faculty_name"], "Faculty of Computer Science")
+        self.assertEqual(profile["status"], "active")
+        self.assertEqual(profile["availability"], "available")
 
     def test_students_merge_advisor_and_course_relationships(self):
         students = get_faculty_students(self.current_user, self.db)
@@ -254,6 +260,30 @@ class FacultyRouterTests(unittest.TestCase):
         self.assertEqual(by_id["STU0001"]["relationship_type"], "advisor")
         self.assertEqual(by_id["STU0002"]["relationship_type"], "course_student")
 
+    def test_faculty_students_include_realistic_gpa_summary_fields(self):
+        self.db.add(
+            CourseRegistration(
+                id=999,
+                student_id=20,
+                course_offering_id=40,
+                status="completed",
+                final_grade="A",
+                is_passed=True,
+            )
+        )
+        self.db.commit()
+
+        students = get_faculty_students(self.current_user, self.db)
+        advisor = next(
+            student for student in students if student["university_id"] == "STU0001"
+        )
+
+        self.assertEqual(advisor["has_gpa_data"], True)
+        self.assertEqual(advisor["completed_courses_count"], 1)
+        self.assertEqual(advisor["passed_credit_hours"], 3)
+        self.assertAlmostEqual(advisor["cgpa"], 4.0)
+        self.assertEqual(advisor["risk_status"], "good_standing")
+
     def test_courses_are_assigned_and_level_falls_back_to_semester(self):
         courses = get_faculty_courses(self.current_user, self.db)
 
@@ -262,6 +292,23 @@ class FacultyRouterTests(unittest.TestCase):
         self.assertEqual(courses[0]["level"], 2)
         self.assertEqual(courses[0]["enrolled_students_count"], 2)
         self.assertEqual(courses[0]["capacity"], 50)
+
+    def test_duplicate_assignment_rows_do_not_duplicate_course_load(self):
+        self.db.add(
+            CourseInstructor(
+                id=51,
+                course_offering_id=40,
+                instructor_id=10,
+            )
+        )
+        self.db.commit()
+
+        profile = get_faculty_profile(self.current_user, self.db)
+        courses = get_faculty_courses(self.current_user, self.db)
+
+        self.assertEqual(profile["availability"], "available")
+        self.assertEqual(len(courses), 1)
+        self.assertEqual(courses[0]["course_offering_id"], 40)
 
     def test_courses_use_catalog_titles_and_academic_order(self):
         semester_one = Semester(
@@ -340,7 +387,7 @@ class FacultyRouterTests(unittest.TestCase):
         )
 
     def test_enrollment_students_include_real_eligibility_statuses(self):
-        payload = get_course_offering_enrollment_students(
+        payload = get_course_offering_available_students(
             40,
             self.current_user,
             self.db,
@@ -357,6 +404,26 @@ class FacultyRouterTests(unittest.TestCase):
         self.assertIn("lower than course level", by_id["STU0003"]["reason"])
         self.assertEqual(by_id["STU0004"]["status"], "eligible")
         self.assertTrue(by_id["STU0004"]["is_selectable"])
+
+    def test_students_endpoint_returns_roster_with_registration_fields(self):
+        payload = get_course_offering_enrollment_students(
+            40,
+            self.current_user,
+            self.db,
+        )
+
+        self.assertEqual(payload["course"]["course_offering_id"], 40)
+        self.assertEqual(payload["course"]["current_enrolled_count"], 2)
+        self.assertEqual(
+            [student["university_id"] for student in payload["students"]],
+            ["STU0001", "STU0002"],
+        )
+        self.assertEqual(
+            payload["students"][0]["registration_status"],
+            "registered",
+        )
+        self.assertIn("final_grade", payload["students"][0])
+        self.assertIn("is_passed", payload["students"][0])
 
     def test_faculty_can_enroll_an_eligible_student(self):
         response = enroll_students_in_course_offering(
@@ -446,7 +513,7 @@ class FacultyRouterTests(unittest.TestCase):
             self.current_user,
             self.db,
         )
-        enrollment_page = get_course_offering_enrollment_students(
+        enrollment_page = get_course_offering_available_students(
             offering.id,
             self.current_user,
             self.db,
@@ -474,7 +541,40 @@ class FacultyRouterTests(unittest.TestCase):
                 self.db,
             )
 
-        self.assertEqual(context.exception.status_code, 403)
+        self.assertEqual(context.exception.status_code, 404)
+
+    def test_demo_enrollment_seed_is_additive_and_idempotent(self):
+        first_stats = seed_demo_faculty_enrollments(self.db)
+        self.db.commit()
+        first_count = (
+            self.db.query(CourseRegistration)
+            .filter(CourseRegistration.course_offering_id == 40)
+            .count()
+        )
+        active_count = (
+            self.db.query(CourseRegistration)
+            .filter(
+                CourseRegistration.course_offering_id == 40,
+                CourseRegistration.status.in_(["registered", "enrolled", "active"]),
+            )
+            .count()
+        )
+
+        second_stats = seed_demo_faculty_enrollments(self.db)
+        self.db.commit()
+        second_count = (
+            self.db.query(CourseRegistration)
+            .filter(CourseRegistration.course_offering_id == 40)
+            .count()
+        )
+
+        self.assertEqual(active_count, 3)
+        self.assertEqual(first_count, 4)
+        self.assertEqual(second_count, first_count)
+        self.assertEqual(first_stats["enrolled_registrations_created"], 1)
+        self.assertEqual(first_stats["completed_registrations_created"], 1)
+        self.assertEqual(second_stats["enrolled_registrations_created"], 0)
+        self.assertEqual(second_stats["completed_registrations_created"], 0)
 
 
 if __name__ == "__main__":

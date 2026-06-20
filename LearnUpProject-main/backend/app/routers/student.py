@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.security import require_student
 from app.services import registration_rules
 from app.services import course_enrollment
+from app.services.academic_metrics import recalculate_student_academic_metrics
 from app.models.course import Course
 from app.models.course_offering import CourseOffering
 from app.models.course_registration import CourseRegistration
@@ -118,6 +119,7 @@ def _build_student_profile_payload(
     db: Session, current_user: User, response: Response | None = None
 ) -> dict:
     student = _get_student_profile(db, current_user)
+    metrics = recalculate_student_academic_metrics(db, student)
     if response is not None:
         response.headers["X-LearnUp-Student-Card"] = "v2"
 
@@ -163,8 +165,8 @@ def _build_student_profile_payload(
         "department_name": department_name,
         "department_code": department_code,
         "level": student.level,
-        "cgpa": student.cgpa,
-        "passed_credit_hours": student.passed_credit_hours,
+        "cgpa": metrics["cgpa"],
+        "passed_credit_hours": metrics["passed_credit_hours"],
         "total_credit_hours": TOTAL_PROGRAM_CREDIT_HOURS,
         "phone": student.phone,
         "advisor_instructor_id": student.advisor_instructor_id,

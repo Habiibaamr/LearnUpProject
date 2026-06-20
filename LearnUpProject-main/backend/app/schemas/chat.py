@@ -8,6 +8,11 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
 
 
+class ChatbotMessageRequest(BaseModel):
+    message: str = Field(min_length=1)
+    session_id: Optional[int] = None
+
+
 class ChatSourceItem(BaseModel):
     id: Optional[str] = None
     title: Optional[str] = None
@@ -21,9 +26,10 @@ class ChatResponse(BaseModel):
     sources: List[ChatSourceItem] = Field(default_factory=list)
 
 
-class ChatStartResponse(BaseModel):
+class ChatbotMessageResponse(BaseModel):
     session_id: int
-    started_at: datetime
+    reply: str
+    created_at: datetime
 
 
 class ChatMessageOut(BaseModel):
@@ -34,6 +40,16 @@ class ChatMessageOut(BaseModel):
     sender_type: str
     message_text: str
     created_at: datetime
+
+
+class ChatbotHistoryResponse(BaseModel):
+    session_id: Optional[int] = None
+    messages: List[ChatMessageOut] = Field(default_factory=list)
+
+
+class ChatStartResponse(BaseModel):
+    session_id: int
+    started_at: datetime
 
 
 class ChatSessionOut(BaseModel):

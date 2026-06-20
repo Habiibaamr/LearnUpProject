@@ -10,6 +10,7 @@ from app.models.user import User
 from app.routers.student import _get_department_name, _get_student_profile
 from app.schemas.auth import LoginRequest, LoginResponse, UserMeResponse
 from app.services import auth_service
+from app.services.academic_metrics import recalculate_student_academic_metrics
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -32,6 +33,7 @@ def read_me(
     db: Session = Depends(get_db),
 ):
     student = _get_student_profile(db, current_user)
+    metrics = recalculate_student_academic_metrics(db, student)
     department_name = None
     advisor_name = None
 
@@ -57,6 +59,6 @@ def read_me(
         level=student.level,
         advisor_instructor_id=student.advisor_instructor_id,
         advisor_name=advisor_name,
-        cgpa=student.cgpa,
-        passed_credit_hours=student.passed_credit_hours,
+        cgpa=metrics["cgpa"],
+        passed_credit_hours=metrics["passed_credit_hours"],
     )

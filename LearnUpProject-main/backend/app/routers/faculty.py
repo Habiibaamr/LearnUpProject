@@ -1,3 +1,4 @@
+import logging
 import re
 from datetime import date, datetime, timezone
 
@@ -21,9 +22,15 @@ from app.models.semester import Semester
 from app.models.student import Student
 from app.models.user import User
 from app.services import registration_rules
+from app.services.academic_metrics import recalculate_student_academic_metrics
 
 router = APIRouter(prefix="/faculty", tags=["faculty"])
 DEFAULT_COURSE_CAPACITY = 40
+ROSTER_REGISTRATION_STATUSES = (
+    *registration_rules.ACTIVE_REGISTRATION_STATUSES,
+    "completed",
+)
+_log = logging.getLogger("uvicorn.error")
 
 
 class EnrollStudentsRequest(BaseModel):
@@ -114,20 +121,6 @@ def _get_assigned_offering(
     instructor_id: int,
     course_offering_id: int,
 ) -> tuple[CourseOffering, Course, Semester | None]:
-    assignment = (
-        db.query(CourseInstructor)
-        .filter(
-            CourseInstructor.instructor_id == instructor_id,
-            CourseInstructor.course_offering_id == course_offering_id,
-        )
-        .first()
-    )
-    if assignment is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This course offering is not assigned to the logged-in faculty member",
-        )
-
     offering = (
         db.query(CourseOffering)
         .filter(CourseOffering.id == course_offering_id)
@@ -138,6 +131,24 @@ def _get_assigned_offering(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Course offering not found",
         )
+
+    assignment = (
+        db.query(CourseInstructor)
+        .filter(
+            CourseInstructor.instructor_id == instructor_id,
+            CourseInstructor.course_offering_id == course_offering_id,
+        )
+        .first()
+    )
+    _log.info("FACULTY CURRENT INSTRUCTOR ID %s", instructor_id)
+    _log.info("FACULTY REQUESTED COURSE OFFERING ID %s", course_offering_id)
+    _log.info("FACULTY MATCHING COURSE INSTRUCTOR ROW %s", assignment)
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This course offering is not assigned to the logged-in faculty member",
+        )
+
     course = db.query(Course).filter(Course.id == offering.course_id).first()
     if course is None:
         raise HTTPException(
@@ -192,6 +203,7 @@ def _course_payload(
         "capacity": capacity,
         "status": offering.status,
         "current_enrolled_count": current_enrolled_count,
+        "enrolled_students_count": current_enrolled_count,
         "remaining_seats": max(0, capacity - current_enrolled_count),
     }
 
@@ -261,23 +273,35 @@ def _student_enrollment_status(
     capacity: int,
     current_enrolled_count: int,
 ) -> dict:
-    active_registration = (
+    existing_registration = (
         db.query(CourseRegistration)
         .filter(
             CourseRegistration.student_id == student.id,
             CourseRegistration.course_offering_id == offering.id,
-            CourseRegistration.status.in_(
-                registration_rules.ACTIVE_REGISTRATION_STATUSES
-            ),
         )
+        .order_by(CourseRegistration.id.asc())
         .first()
     )
-    if active_registration is not None:
+    if (
+        existing_registration is not None
+        and existing_registration.status
+        in registration_rules.ACTIVE_REGISTRATION_STATUSES
+    ):
         return {
             "status": "already_enrolled",
             "is_enrolled": True,
             "is_selectable": False,
             "reason": "Already enrolled in this course",
+        }
+    if (
+        existing_registration is not None
+        and existing_registration.status != "dropped"
+    ):
+        return {
+            "status": "not_eligible",
+            "is_enrolled": False,
+            "is_selectable": False,
+            "reason": "A registration record already exists for this course offering",
         }
     if not user.is_active:
         return {
@@ -403,6 +427,7 @@ def _student_payload(
     user = db.query(User).filter(User.id == student.user_id).first()
     if user is None or user.role != "student":
         return None
+    metrics = recalculate_student_academic_metrics(db, student)
     return {
         "student_id": student.id,
         "user_id": user.id,
@@ -412,7 +437,11 @@ def _student_payload(
         "department_id": student.department_id,
         "department_name": _get_department_name(db, student.department_id),
         "level": student.level,
-        "cgpa": student.cgpa,
+        "cgpa": metrics["cgpa"],
+        "passed_credit_hours": metrics["passed_credit_hours"],
+        "completed_courses_count": metrics["completed_courses_count"],
+        "has_gpa_data": metrics["has_gpa_data"],
+        "risk_status": metrics["risk_status"],
         "status": "active" if user.is_active else "inactive",
         "relationship_type": relationship_type,
     }
@@ -428,9 +457,7 @@ def _course_registration_students_payload(
         db.query(CourseRegistration)
         .filter(
             CourseRegistration.course_offering_id == offering.id,
-            CourseRegistration.status.in_(
-                registration_rules.ACTIVE_REGISTRATION_STATUSES
-            ),
+            CourseRegistration.status.in_(ROSTER_REGISTRATION_STATUSES),
         )
         .order_by(CourseRegistration.id.asc())
         .all()
@@ -453,12 +480,20 @@ def _course_registration_students_payload(
                 "registration_id": registration.id,
                 "registration_status": registration.status,
                 "registered_at": registration.registered_at,
+                "final_grade": registration.final_grade,
+                "is_passed": registration.is_passed,
             }
         )
 
     return {
         "course": _course_payload(db, offering, course, semester),
-        "students": students,
+        "students": sorted(
+            students,
+            key=lambda item: (
+                str(item["full_name"]).casefold(),
+                str(item["university_id"]),
+            ),
+        ),
     }
 
 
@@ -468,6 +503,12 @@ def get_faculty_profile(
     db: Session = Depends(get_db),
 ):
     instructor = _get_instructor(db, current_user)
+    assigned_courses_count = (
+        db.query(CourseInstructor.course_offering_id)
+        .filter(CourseInstructor.instructor_id == instructor.id)
+        .distinct()
+        .count()
+    )
     return {
         "instructor_id": instructor.id,
         "user_id": current_user.id,
@@ -482,6 +523,10 @@ def get_faculty_profile(
         "specialization": instructor.specialization,
         "office_location": instructor.office_location,
         "phone": instructor.phone,
+        "status": "active" if current_user.is_active else "inactive",
+        "availability": (
+            "full_load" if assigned_courses_count >= 3 else "available"
+        ),
     }
 
 
@@ -516,7 +561,9 @@ def get_faculty_students(
             db.query(CourseRegistration)
             .filter(
                 CourseRegistration.course_offering_id.in_(offering_ids),
-                CourseRegistration.status.in_(["registered", "enrolled", "active"]),
+                CourseRegistration.status.in_(
+                    registration_rules.ACTIVE_REGISTRATION_STATUSES
+                ),
             )
             .all()
         )
@@ -562,7 +609,11 @@ def get_faculty_courses(
     )
 
     result = []
+    seen_offering_ids: set[int] = set()
     for assignment in assignments:
+        if assignment.course_offering_id in seen_offering_ids:
+            continue
+        seen_offering_ids.add(assignment.course_offering_id)
         offering = (
             db.query(CourseOffering)
             .filter(CourseOffering.id == assignment.course_offering_id)
@@ -579,14 +630,7 @@ def get_faculty_courses(
             .first()
         )
         semester_number = _semester_number(semester, offering.semester_id)
-        enrolled_students_count = (
-            db.query(CourseRegistration)
-            .filter(
-                CourseRegistration.course_offering_id == offering.id,
-                CourseRegistration.status.in_(["registered", "enrolled", "active"]),
-            )
-            .count()
-        )
+        enrolled_students_count = _active_registration_count(db, offering.id)
 
         result.append(
             {
@@ -637,6 +681,34 @@ def get_faculty_course_offering(
 
 @router.get("/course-offerings/{course_offering_id}/students")
 def get_course_offering_enrollment_students(
+    course_offering_id: int,
+    current_user: User = Depends(require_instructor),
+    db: Session = Depends(get_db),
+    include_available: bool = False,
+):
+    instructor = _get_instructor(db, current_user)
+    offering, course, semester = _get_assigned_offering(
+        db,
+        instructor.id,
+        course_offering_id,
+    )
+    if include_available:
+        return _course_enrollment_students_payload(
+            db,
+            offering,
+            course,
+            semester,
+        )
+    return _course_registration_students_payload(
+        db,
+        offering,
+        course,
+        semester,
+    )
+
+
+@router.get("/course-offerings/{course_offering_id}/available-students")
+def get_course_offering_available_students(
     course_offering_id: int,
     current_user: User = Depends(require_instructor),
     db: Session = Depends(get_db),
@@ -733,22 +805,33 @@ def enroll_students_in_course_offering(
         students_to_enroll.append(student)
 
     for student in students_to_enroll:
-        dropped_registration = (
+        existing_registration = (
             db.query(CourseRegistration)
             .filter(
                 CourseRegistration.student_id == student.id,
                 CourseRegistration.course_offering_id == offering.id,
-                CourseRegistration.status == "dropped",
             )
+            .order_by(CourseRegistration.id.asc())
             .first()
         )
-        if dropped_registration is not None:
-            dropped_registration.status = "enrolled"
-            dropped_registration.added_by_user_id = current_user.id
-            dropped_registration.registered_at = datetime.now(timezone.utc)
-            dropped_registration.final_grade = None
-            dropped_registration.is_passed = None
-            dropped_registration.completed_at = None
+        if (
+            existing_registration is not None
+            and existing_registration.status == "dropped"
+        ):
+            existing_registration.status = "enrolled"
+            existing_registration.added_by_user_id = current_user.id
+            existing_registration.registered_at = datetime.now(timezone.utc)
+            existing_registration.final_grade = None
+            existing_registration.is_passed = None
+            existing_registration.completed_at = None
+        elif existing_registration is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Student {student.id} already has a registration "
+                    "for this course offering"
+                ),
+            )
         else:
             db.add(
                 CourseRegistration(
@@ -756,6 +839,7 @@ def enroll_students_in_course_offering(
                     course_offering_id=offering.id,
                     status="enrolled",
                     added_by_user_id=current_user.id,
+                    registered_at=datetime.now(timezone.utc),
                 )
             )
 
