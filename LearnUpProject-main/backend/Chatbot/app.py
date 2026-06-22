@@ -14,9 +14,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
 _ROOT = Path(__file__).resolve().parent
-_BACKEND = _ROOT.parent / "backend"
-if _BACKEND.is_dir() and str(_BACKEND) not in sys.path:
-    sys.path.insert(0, str(_BACKEND))
+_BACKEND_CANDIDATES = (
+    _ROOT.parent,
+    _ROOT.parent.parent / "backend",
+)
+for _backend in _BACKEND_CANDIDATES:
+    if (_backend / "app" / "services" / "chatbot_service.py").is_file():
+        if str(_backend) not in sys.path:
+            sys.path.insert(0, str(_backend))
+        break
 
 from app.services.chatbot_service import ChatRequest, build_standalone_engine
 
