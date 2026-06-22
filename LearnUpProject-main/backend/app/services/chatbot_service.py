@@ -9,6 +9,7 @@ Set OPENAI_API_KEY in backend/.env
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -17,13 +18,15 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import faiss
 import numpy as np
-from dotenv import dotenv_values, load_dotenv
+from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Paths & env (backend/.env always, regardless of cwd)
 # ---------------------------------------------------------------------------
+
+_log = logging.getLogger("uvicorn.error")
 
 
 def _backend_root() -> Path:
@@ -34,56 +37,11 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent.parent
 
 
-def _read_openai_key_from_dotenv_file() -> str:
-    path = _backend_root() / ".env"
-    if not path.is_file():
-        return ""
-    try:
-        text = path.read_text(encoding="utf-8-sig")
-    except OSError:
-        return ""
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        m = re.match(r"^OPENAI_API_KEY\s*=\s*(.+)$", line, re.IGNORECASE)
-        if m:
-            return m.group(1).strip().strip('"').strip("'")
-    return ""
-
-
 def _resolve_llm_settings() -> tuple[str, str, str]:
-    env_path = _backend_root() / ".env"
-    load_dotenv(env_path, override=True)
-
-    file_vals: Dict[str, str] = {}
-    if env_path.is_file():
-        dv = dotenv_values(env_path)
-        file_vals = {k: (str(v).strip() if v is not None else "") for k, v in dv.items()}
-
-    key = (os.getenv("OPENAI_API_KEY") or file_vals.get("OPENAI_API_KEY") or "").strip().strip('"').strip("'")
-    if not key:
-        key = _read_openai_key_from_dotenv_file().strip().strip('"').strip("'")
-    if not key:
-        root = _project_root()
-        for extra in (root / "Chatbot" / ".env", root / ".env"):
-            if not extra.is_file():
-                continue
-            load_dotenv(extra, override=False)
-            dv = dotenv_values(extra)
-            k2 = (dv.get("OPENAI_API_KEY") or "").strip().strip('"').strip("'")
-            if k2:
-                key = k2
-                break
-    if key:
-        os.environ["OPENAI_API_KEY"] = key
-
-    chat = (os.getenv("OPENAI_MODEL") or file_vals.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
-    emb = (
-        os.getenv("OPENAI_EMBED_MODEL")
-        or file_vals.get("OPENAI_EMBED_MODEL")
-        or "text-embedding-3-small"
-    ).strip()
+    load_dotenv(_backend_root() / ".env", override=False)
+    key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    chat = (os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
+    emb = (os.getenv("OPENAI_EMBED_MODEL") or "text-embedding-3-small").strip()
     return key, chat, emb
 
 
@@ -137,15 +95,15 @@ KBS = {
     "REGISTRATION": "registration_rules.md",
 }
 
-BASE_PROMPT = """You are the 'Graduation Assistant', a premium university AI advisor. 
-Provide accurate, helpful, and empathetic guidance based ONLY on the provided context.
+BASE_PROMPT = """You are LearnUp Academic Advisor Bot. Use the provided student SIS context to answer academic questions. If the user asks about grades, GPA, enrolled courses, passed courses, or available courses, answer from the provided context. Do not claim you lack access if the context contains the data.
 
 ### GUIDELINES:
-1. **Source Attribution**: Always cite information using the [ID] from the context (e.g., [REG-2026-0]).
-2. **Formatting**: Use Markdown. Use **bold** for deadlines/metrics and bullet points for lists.
-3. **Tone**: Be professional and encouraging. 
-4. **Accuracy**: If the answer is not in context, state that you don't have that specific record and suggest visiting an advisor.
-5. **Language**: Support both English and Arabic based on the user's query.
+1. **Student Context Priority**: For questions about grades, GPA, enrolled courses, passed courses, available courses, or academic progress, use the LOGGED-IN STUDENT DATABASE CONTEXT first.
+2. **Source Attribution**: For knowledge base information, cite using the [ID] from the context (e.g., [REG-2026-0]).
+3. **Formatting**: Use Markdown. Use **bold** for deadlines/metrics and bullet points for lists.
+4. **Tone**: Be professional and encouraging. 
+5. **Accuracy**: If the answer is not in student context or knowledge base, state that you don't have that specific record and suggest visiting an advisor.
+6. **Language**: Support both English and Arabic based on the user's query.
 """
 
 CATEGORY_PROMPTS = {
@@ -232,7 +190,12 @@ class RAGEngine:
             all_embeddings.extend([d.embedding for d in resp.data])
         return all_embeddings
 
-    def search(self, query: str, top_k: int = 5) -> Tuple[str, str, List[Dict]]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        student_context: str = "",
+    ) -> Tuple[str, str, List[Dict]]:
         q = query.lower()
         reg_keywords = [
             "registration",
@@ -355,7 +318,16 @@ class RAGEngine:
 
         context = "\n\n".join([f"[{h['id']}] (Title: {h['title']})\n{h['text']}" for h in hits])
 
-        system_instructions = f"{BASE_PROMPT}\n\n{CATEGORY_PROMPTS.get(kb_name, '')}\n\nCONTEXT:\n{context}"
+        student_context_block = (
+            "\n\nLOGGED-IN STUDENT DATABASE CONTEXT (authoritative):\n"
+            f"{student_context}"
+            if student_context
+            else ""
+        )
+        system_instructions = (
+            f"{BASE_PROMPT}\n\n{CATEGORY_PROMPTS.get(kb_name, '')}"
+            f"{student_context_block}\n\nKNOWLEDGE BASE CONTEXT:\n{context}"
+        )
 
         resp = self.client.chat.completions.create(
             model=self.config.CHAT_MODEL,
@@ -423,29 +395,70 @@ def _get_engine() -> RAGEngine:
     return _engine
 
 
-def generate_chatbot_reply(message: str) -> ChatbotReply:
+def generate_chatbot_reply(
+    message: str,
+    *,
+    student_context: str = "",
+    fallback_text: str = "",
+) -> ChatbotReply:
     text = (message or "").strip()
     if not text:
         return ChatbotReply("Please enter a message.", [], "")
 
+    api_key, chat_model, _ = _resolve_llm_settings()
+    key_exists = bool(api_key)
+    key_length_valid = len(api_key) > 20 if api_key else False
+    ai_provider = "OpenAI" if key_exists else "None"
+    
+    _log.info("AI_PROVIDER: %s", ai_provider)
+    _log.info("OPENAI_API_KEY exists: %s", str(key_exists).lower())
+    _log.info("OPENAI_API_KEY length > 20: %s", str(key_length_valid).lower())
+
+    if not key_exists:
+        _log.warning("OPENAI_API_KEY missing or invalid")
+        _log.info("using OpenAI: false")
+        _log.info("using fallback: true")
+        return ChatbotReply(
+            fallback_text or "AI service is not configured on the backend environment.",
+            [],
+            "",
+        )
+
+    if not key_length_valid:
+        _log.warning("OPENAI_API_KEY exists but length is invalid (too short)")
+        _log.info("using OpenAI: false")
+        _log.info("using fallback: true")
+        return ChatbotReply(
+            fallback_text or "AI service is configured but the OpenAI key appears invalid. Please check backend logs.",
+            [],
+            "",
+        )
+
     try:
         engine = _get_engine()
-        kb_name, answer, hits = engine.search(text)
+        kb_name, answer, hits = engine.search(
+            text,
+            student_context=student_context,
+        )
         body = (answer or "").strip()
         if not body:
-            body = (
-                "I couldn't generate a reply. Check knowledge base files under "
-                f"{_kb_data_dir()} and OPENAI_API_KEY in backend/.env."
-            )
+            body = fallback_text or "Learnbot could not generate a response."
         sources: List[Dict[str, Any]] = []
         for h in hits or []:
             if isinstance(h, dict):
                 sources.append({"id": h.get("id"), "title": h.get("title")})
+        _log.info("using OpenAI: true")
+        _log.info("using fallback: false")
         return ChatbotReply(body, sources, str(kb_name or ""))
-    except RuntimeError as e:
-        return ChatbotReply(f"Chatbot is not available: {e}", [], "")
     except Exception as e:
-        return ChatbotReply(f"Sorry, the assistant hit an error: {type(e).__name__}: {e}", [], "")
+        _log.warning("OpenAI request failed: %s", str(e))
+        _log.info("using OpenAI: false")
+        _log.info("using fallback: true")
+        return ChatbotReply(
+            fallback_text or "AI service is configured but the OpenAI request failed. Please check backend logs.",
+            [],
+            "",
+        )
 
 
 def format_stored_assistant_message(reply: ChatbotReply) -> str:
