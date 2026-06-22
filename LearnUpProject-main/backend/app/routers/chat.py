@@ -123,6 +123,7 @@ def send_chat_message(
     _get_owned_session(db, session_id, current_user.id)
     reply = chatbot_service.generate_chatbot_reply(body.message)
 
+    
     reply_scope = getattr(reply, "scope", None) or getattr(reply, "kb", None) or "rag"
     _log.info("detected scope: %s", reply_scope)    
     _log.info("RAG used: %s", str(reply.rag_used).lower())
