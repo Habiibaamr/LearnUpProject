@@ -3,6 +3,10 @@
 .env*.local
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
 venv/
 venv.broken-*/
 uploads/
+.DS_Store
+._*

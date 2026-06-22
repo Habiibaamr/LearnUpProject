@@ -1,16 +1,11 @@
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
-
-
-class ChatbotMessageRequest(BaseModel):
-    message: str = Field(min_length=1)
-    session_id: Optional[int] = None
 
 
 class ChatSourceItem(BaseModel):
@@ -26,12 +21,6 @@ class ChatResponse(BaseModel):
     sources: List[ChatSourceItem] = Field(default_factory=list)
 
 
-class ChatbotMessageResponse(BaseModel):
-    session_id: int
-    reply: str
-    created_at: datetime
-
-
 class ChatMessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -40,11 +29,6 @@ class ChatMessageOut(BaseModel):
     sender_type: str
     message_text: str
     created_at: datetime
-
-
-class ChatbotHistoryResponse(BaseModel):
-    session_id: Optional[int] = None
-    messages: List[ChatMessageOut] = Field(default_factory=list)
 
 
 class ChatStartResponse(BaseModel):
