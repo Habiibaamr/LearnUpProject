@@ -368,34 +368,24 @@ def _build_database_fallback(question: str, context: dict) -> str:
     )
 
 
-def _detect_intent(message: str) -> str:
-    """Detect the intent of the user's message."""
+def _detect_sis_question(message: str) -> bool:
+    """Detect if the message is asking for student-specific SIS data."""
     normalized = (message or "").strip().lower()
-    _log.info("active_chat_handler_called: true")
-    _log.info("message_text: %s", normalized)
     
-    # Check for GPA questions
-    if "gpa" in normalized or "cgpa" in normalized:
-        _log.info("detected_intent: gpa")
-        return "gpa"
+    # Check for SIS-specific questions
+    if any(term in normalized for term in ("gpa", "cgpa")) and "my" in normalized:
+        return True
     
-    # Check for grades/results questions
-    if any(term in normalized for term in ("grade", "result", "marks", "semester result")):
-        _log.info("detected_intent: grades")
-        return "grades"
+    if any(term in normalized for term in ("my grade", "my result", "my marks", "show my grade", "show my result")):
+        return True
     
-    # Check for enrolled courses questions
-    if any(term in normalized for term in ("enrolled", "my course", "registered")) and "course" in normalized:
-        _log.info("detected_intent: enrolled_courses")
-        return "enrolled_courses"
+    if any(term in normalized for term in ("my enrolled course", "my registered course", "show my enrolled", "show my registered")):
+        return True
     
-    # Check for available courses questions - more flexible matching
-    if any(term in normalized for term in ("available", "can i take", "what can i", "course board", "courses can i")) and "course" in normalized:
-        _log.info("detected_intent: available_courses")
-        return "available_courses"
+    if any(term in normalized for term in ("what courses can i take", "available course", "course board")) and "course" in normalized:
+        return True
     
-    _log.info("detected_intent: general")
-    return "general"
+    return False
 
 
 @router.post("/{session_id:int}/message", response_model=ChatResponse)
@@ -428,31 +418,20 @@ def send_chat_message(
 
     academic_context = _get_student_academic_context(current_user, db)
     
-    # Debug logs for student data
-    _log.info("student_id: %s", academic_context.get("student_id"))
-    _log.info("student_level: %s", academic_context.get("level"))
-    _log.info("student_cgpa: %s", academic_context.get("cgpa"))
-    _log.info("registrations_count: %d", len(academic_context.get("enrolled_courses", [])) + len(academic_context.get("completed_courses", [])))
-    _log.info("grades_count: %d", len(academic_context.get("grades", [])))
-    _log.info("enrolled_courses_count: %d", len(academic_context.get("enrolled_courses", [])))
-    _log.info("available_courses_count: %d", len(academic_context.get("available_courses", [])))
+    # Check if this is a SIS-specific question
+    is_sis_question = _detect_sis_question(body.message)
+    _log.info("is_sis_question: %s", is_sis_question)
     
-    # Detect intent
-    intent = _detect_intent(body.message)
-    _log.info("intent detected: %s", intent)
-    
-    # Direct database answers for specific intents
-    if intent in ("gpa", "grades", "enrolled_courses", "available_courses"):
-        _log.info("used_sis_direct_answer: true")
-        _log.info("used_advising_kb: false")
-        _log.info("returned_kb: SIS")
+    if is_sis_question:
+        _log.info("used_sis_direct_answer: false")
+        _log.info("used_rag: false")
+        _log.info("returned_kb: None")
         
-        direct_answer = _build_database_fallback(body.message, academic_context)
-        stored_text = direct_answer
+        sis_fallback = "Student record access is not connected yet. I can currently help with academic advising, registration rules, policies, and study guidance."
         assistant_msg = ChatMessage(
             session_id=session_id,
             sender_type="assistant",
-            message_text=stored_text,
+            message_text=sis_fallback,
         )
         db.add(assistant_msg)
         db.commit()
@@ -465,14 +444,13 @@ def send_chat_message(
         return ChatResponse(
             session_id=session_id,
             user_message=body.message,
-            assistant_response=direct_answer,
-            kb="SIS",
+            assistant_response=sis_fallback,
+            kb=None,
             sources=[],
         )
     
-    # For general questions, use OpenAI with student context
-    _log.info("used_sis_direct_answer: false")
-    _log.info("used_advising_kb: true")
+    # For general questions, use OpenAI/RAG
+    _log.info("used_rag: true")
     
     api_key_exists = bool(os.getenv("OPENAI_API_KEY", "").strip())
     _log.info("OPENAI_API_KEY exists: %s", str(api_key_exists).lower())
@@ -480,7 +458,7 @@ def send_chat_message(
     turn = chatbot_service.generate_chatbot_reply(
         body.message,
         student_context=_build_chat_context(academic_context),
-        fallback_text=_build_database_fallback(body.message, academic_context),
+        fallback_text="AI service is not configured yet. Please add OPENAI_API_KEY to the backend environment.",
     )
     
     _log.info("used OpenAI: %s", str(turn.kb != "").lower())
