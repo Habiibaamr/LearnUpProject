@@ -124,10 +124,17 @@ def send_chat_message(
     reply = chatbot_service.generate_chatbot_reply(body.message)
 
     
-    reply_scope = getattr(reply, "scope", None) or getattr(reply, "kb", None) or "rag"
-    _log.info("detected scope: %s", reply_scope)    
-    _log.info("RAG used: %s", str(reply.rag_used).lower())
-    _log.info("fallback used: %s", str(reply.fallback_used).lower())
+    reply_kb = getattr(reply, "kb", None)
+    reply_sources = getattr(reply, "sources", []) or []
+    reply_text = getattr(reply, "text", "") or ""
+
+    reply_scope = getattr(reply, "scope", None) or reply_kb or "rag"
+    rag_used = bool(reply_kb or reply_sources)
+    fallback_used = not rag_used
+
+    _log.info("detected scope: %s", reply_scope)
+    _log.info("RAG used: %s", str(rag_used).lower())
+    _log.info("fallback used: %s", str(fallback_used).lower())
 
     db.add_all(
         [
